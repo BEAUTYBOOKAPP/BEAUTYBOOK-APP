@@ -22,7 +22,7 @@ class BeautyBook extends StatelessWidget {
   @override Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner:false, title:'BEAUTYBOOK',
     supportedLocales:L.supported,
-    localizationsDelegates:const [GlobalMaterialLocalizations.delegate,GlobalWidgetsLocalizations.delegate,GlobalCupertinoLocalizations.delegate],
+    localizationsDelegates:[GlobalMaterialLocalizations.delegate,GlobalWidgetsLocalizations.delegate,GlobalCupertinoLocalizations.delegate],
     theme:ThemeData(useMaterial3:true,colorScheme:ColorScheme.fromSeed(seedColor:const Color(0xff8e4162)),scaffoldBackgroundColor:const Color(0xfffffafc)),
     home: AppConfig.configured ? const AuthGate() : const SetupScreen());
 }
