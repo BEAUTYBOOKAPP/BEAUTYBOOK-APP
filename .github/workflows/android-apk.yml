@@ -13,21 +13,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract BEAUTYBOOK project
-        run: |
-          rm -rf extracted
-          mkdir extracted
-          unzip -o BEAUTYBOOK_MVP.zip -d extracted
-          cp -a extracted/beautybook_flutter/. .
-
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Generate Android project
-        run: flutter create --platforms=android --project-name beautybook .
+      - name: Generate clean Android project
+        run: |
+          rm -rf android
+          flutter create --platforms=android --project-name beautybook .
+          sed -i '/<application/i\    <uses-permission android:name="android.permission.INTERNET"/>' android/app/src/main/AndroidManifest.xml
 
       - name: Install dependencies
         run: flutter pub get
