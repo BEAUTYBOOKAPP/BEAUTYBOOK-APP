@@ -66,32 +66,138 @@ class AuthGate extends StatelessWidget {
 
 class LoginPage extends StatefulWidget { const LoginPage({super.key}); @override State<LoginPage> createState()=>_LoginPageState(); }
 class _LoginPageState extends State<LoginPage>{
-  final email=TextEditingController(), password=TextEditingController(), name=TextEditingController();
-  bool signup=false, busy=false;
+  final email=TextEditingController(), password=TextEditingController(), name=TextEditingController(), code=TextEditingController();
+  bool signup=false, busy=false, awaitingVerification=false;
+  String pendingEmail='', pendingPassword='';
+
+  void message(String text){
+    if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(text)));
+  }
+
   Future<void> submit() async {
+    final e=email.text.trim();
+    final p=password.text;
+    final n=name.text.trim();
+
+    if(e.isEmpty||!e.contains('@')){
+      message('Enter a valid email address.');
+      return;
+    }
+    if(p.length<6){
+      message('Password must be at least 6 characters.');
+      return;
+    }
+    if(signup&&n.isEmpty){
+      message('Enter your full name.');
+      return;
+    }
+
     setState(()=>busy=true);
     try{
       if(signup){
-        await db.auth.signUp(email:email.text.trim(),password:password.text,data:{'full_name':name.text.trim()});
+        final res=await db.auth.signUp(
+          email:e,
+          password:p,
+          data:{'full_name':n},
+        );
+
+        if(res.session!=null){
+          await db.auth.signOut();
+          message('Email verification is not enabled yet. Turn on Confirm email in Supabase before public launch.');
+        }else{
+          pendingEmail=e;
+          pendingPassword=p;
+          code.clear();
+          if(mounted)setState(()=>awaitingVerification=true);
+          message('Verification code sent to $e.');
+        }
       } else {
-        await db.auth.signInWithPassword(email:email.text.trim(),password:password.text);
+        await db.auth.signInWithPassword(email:e,password:p);
+        message('Welcome back.');
       }
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(signup?'Account created. Check email if confirmation is enabled.':'Welcome back.')));
-    }catch(e){ if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString()))); }
+    }catch(e){
+      message(e.toString());
+    }
     if(mounted)setState(()=>busy=false);
   }
+
+  Future<void> verifyCode()async{
+    final token=code.text.trim().replaceAll(' ','');
+    if(token.length<6){
+      message('Enter the verification code from your email.');
+      return;
+    }
+    setState(()=>busy=true);
+    try{
+      final res=await db.auth.verifyOTP(
+        email:pendingEmail,
+        token:token,
+        type:OtpType.email,
+      );
+      if(res.session==null){
+        await db.auth.signInWithPassword(email:pendingEmail,password:pendingPassword);
+      }
+      message('Email verified. Welcome to BEAUTYBOOK.');
+    }catch(e){
+      message('Verification failed: $e');
+    }
+    if(mounted)setState(()=>busy=false);
+  }
+
+  Future<void> resendCode()async{
+    if(pendingEmail.isEmpty)return;
+    setState(()=>busy=true);
+    try{
+      await db.auth.resend(type:OtpType.signup,email:pendingEmail);
+      message('A new verification code was sent.');
+    }catch(e){
+      message(e.toString());
+    }
+    if(mounted)setState(()=>busy=false);
+  }
+
   @override Widget build(BuildContext context)=>Scaffold(body:SafeArea(child:ListView(padding:const EdgeInsets.all(24),children:[
-    const SizedBox(height:45), const Text('BEAUTYBOOK',style:TextStyle(fontSize:32,fontWeight:FontWeight.w900)),
-    Text(signup?'Create your account':'Beauty • Fashion • Your Style',style:const TextStyle(color:Colors.black54)),
-    const SizedBox(height:30),
-    if(signup) TextField(controller:name,decoration:const InputDecoration(labelText:'Full name',border:OutlineInputBorder())),
-    if(signup) const SizedBox(height:12),
-    TextField(controller:email,keyboardType:TextInputType.emailAddress,decoration:const InputDecoration(labelText:'Email',border:OutlineInputBorder())),
-    const SizedBox(height:12),
-    TextField(controller:password,obscureText:true,decoration:const InputDecoration(labelText:'Password',border:OutlineInputBorder())),
-    const SizedBox(height:18),
-    FilledButton(onPressed:busy?null:submit,child:Text(busy?'Please wait...':signup?'Create account':'Sign in')),
-    TextButton(onPressed:()=>setState(()=>signup=!signup),child:Text(signup?'Already have an account? Sign in':'New to BEAUTYBOOK? Create account'))
+    const SizedBox(height:45),
+    const Text('BEAUTYBOOK',style:TextStyle(fontSize:32,fontWeight:FontWeight.w900)),
+    if(awaitingVerification)...[
+      const SizedBox(height:8),
+      const Text('Verify your email',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
+      const SizedBox(height:6),
+      Text('We sent a verification code to $pendingEmail.',style:const TextStyle(color:Colors.black54)),
+      const SizedBox(height:24),
+      TextField(
+        controller:code,
+        keyboardType:TextInputType.number,
+        textInputAction:TextInputAction.done,
+        decoration:const InputDecoration(
+          labelText:'Verification code',
+          hintText:'Enter the code from your email',
+          border:OutlineInputBorder(),
+        ),
+        onSubmitted:(_){if(!busy)verifyCode();},
+      ),
+      const SizedBox(height:18),
+      FilledButton(onPressed:busy?null:verifyCode,child:Text(busy?'Verifying...':'Verify and continue')),
+      TextButton(onPressed:busy?null:resendCode,child:const Text('Resend code')),
+      TextButton(
+        onPressed:busy?null:()=>setState((){awaitingVerification=false;code.clear();}),
+        child:const Text('Use a different email'),
+      ),
+    ] else ...[
+      Text(signup?'Create your account':'Beauty • Fashion • Your Style',style:const TextStyle(color:Colors.black54)),
+      const SizedBox(height:30),
+      if(signup) TextField(controller:name,textCapitalization:TextCapitalization.words,decoration:const InputDecoration(labelText:'Full name',border:OutlineInputBorder())),
+      if(signup) const SizedBox(height:12),
+      TextField(controller:email,keyboardType:TextInputType.emailAddress,autocorrect:false,decoration:const InputDecoration(labelText:'Email',border:OutlineInputBorder())),
+      const SizedBox(height:12),
+      TextField(controller:password,obscureText:true,decoration:const InputDecoration(labelText:'Password',border:OutlineInputBorder())),
+      const SizedBox(height:18),
+      FilledButton(onPressed:busy?null:submit,child:Text(busy?'Please wait...':signup?'Create account':'Sign in')),
+      TextButton(
+        onPressed:busy?null:()=>setState(()=>signup=!signup),
+        child:Text(signup?'Already have an account? Sign in':'New to BEAUTYBOOK? Create account'),
+      )
+    ]
   ])));
 }
 
@@ -237,13 +343,342 @@ class _SellerState extends State<Seller>{
   }
 
   Future<void> businessForm([Map? existing])async{
+    const categoryOptions=<String,String>{
+      'fashion & beauty':'Fashion & beauty',
+      'beauty':'Beauty / general',
+      'hair salon':'Hair salon',
+      'braiding':'Braiding',
+      'barber':'Barber',
+      'nails':'Nails',
+      'makeup':'Makeup',
+      'spa':'Spa',
+      'skincare':'Skincare',
+      'clothing':'Clothing / boutique',
+      'wigs & hair':'Wigs & hair',
+      'shoes':'Shoes',
+      'bags & accessories':'Bags & accessories',
+      'beauty products':'Beauty products / cosmetics',
+      'other':'Other',
+    };
+
+    const countries=<String>[
+      'Afghanistan',
+      'Albania',
+      'Algeria',
+      'American Samoa',
+      'Andorra',
+      'Angola',
+      'Anguilla',
+      'Antarctica',
+      'Antigua and Barbuda',
+      'Argentina',
+      'Armenia',
+      'Aruba',
+      'Australia',
+      'Austria',
+      'Azerbaijan',
+      'Bahamas',
+      'Bahrain',
+      'Bangladesh',
+      'Barbados',
+      'Belarus',
+      'Belgium',
+      'Belize',
+      'Benin',
+      'Bermuda',
+      'Bhutan',
+      'Bolivia',
+      'Bonaire, Sint Eustatius and Saba',
+      'Bosnia and Herzegovina',
+      'Botswana',
+      'Bouvet Island',
+      'Brazil',
+      'British Indian Ocean Territory',
+      'Brunei',
+      'Bulgaria',
+      'Burkina Faso',
+      'Burundi',
+      'Cabo Verde',
+      'Cambodia',
+      'Cameroon',
+      'Canada',
+      'Cayman Islands',
+      'Central African Republic',
+      'Chad',
+      'Chile',
+      'China',
+      'Christmas Island',
+      'Cocos (Keeling) Islands',
+      'Colombia',
+      'Comoros',
+      'Congo',
+      'Cook Islands',
+      'Costa Rica',
+      'Croatia',
+      'Cuba',
+      'Curaçao',
+      'Cyprus',
+      'Czechia',
+      "Côte d'Ivoire",
+      'DR Congo',
+      'Denmark',
+      'Djibouti',
+      'Dominica',
+      'Dominican Republic',
+      'Ecuador',
+      'Egypt',
+      'El Salvador',
+      'Equatorial Guinea',
+      'Eritrea',
+      'Estonia',
+      'Eswatini',
+      'Ethiopia',
+      'Falkland Islands (Malvinas)',
+      'Faroe Islands',
+      'Fiji',
+      'Finland',
+      'France',
+      'French Guiana',
+      'French Polynesia',
+      'French Southern Territories',
+      'Gabon',
+      'Gambia',
+      'Georgia',
+      'Germany',
+      'Ghana',
+      'Gibraltar',
+      'Greece',
+      'Greenland',
+      'Grenada',
+      'Guadeloupe',
+      'Guam',
+      'Guatemala',
+      'Guernsey',
+      'Guinea',
+      'Guinea-Bissau',
+      'Guyana',
+      'Haiti',
+      'Heard Island and McDonald Islands',
+      'Holy See (Vatican City State)',
+      'Honduras',
+      'Hong Kong',
+      'Hungary',
+      'Iceland',
+      'India',
+      'Indonesia',
+      'Iran',
+      'Iraq',
+      'Ireland',
+      'Isle of Man',
+      'Israel',
+      'Italy',
+      'Jamaica',
+      'Japan',
+      'Jersey',
+      'Jordan',
+      'Kazakhstan',
+      'Kenya',
+      'Kiribati',
+      'Kuwait',
+      'Kyrgyzstan',
+      'Laos',
+      'Latvia',
+      'Lebanon',
+      'Lesotho',
+      'Liberia',
+      'Libya',
+      'Liechtenstein',
+      'Lithuania',
+      'Luxembourg',
+      'Macao',
+      'Madagascar',
+      'Malawi',
+      'Malaysia',
+      'Maldives',
+      'Mali',
+      'Malta',
+      'Marshall Islands',
+      'Martinique',
+      'Mauritania',
+      'Mauritius',
+      'Mayotte',
+      'Mexico',
+      'Micronesia, Federated States of',
+      'Moldova',
+      'Monaco',
+      'Mongolia',
+      'Montenegro',
+      'Montserrat',
+      'Morocco',
+      'Mozambique',
+      'Myanmar',
+      'Namibia',
+      'Nauru',
+      'Nepal',
+      'Netherlands',
+      'New Caledonia',
+      'New Zealand',
+      'Nicaragua',
+      'Niger',
+      'Nigeria',
+      'Niue',
+      'Norfolk Island',
+      'North Korea',
+      'North Macedonia',
+      'Northern Mariana Islands',
+      'Norway',
+      'Oman',
+      'Pakistan',
+      'Palau',
+      'Palestine',
+      'Panama',
+      'Papua New Guinea',
+      'Paraguay',
+      'Peru',
+      'Philippines',
+      'Pitcairn',
+      'Poland',
+      'Portugal',
+      'Puerto Rico',
+      'Qatar',
+      'Romania',
+      'Russia',
+      'Rwanda',
+      'Réunion',
+      'Saint Barthélemy',
+      'Saint Helena, Ascension and Tristan da Cunha',
+      'Saint Kitts and Nevis',
+      'Saint Lucia',
+      'Saint Martin (French part)',
+      'Saint Pierre and Miquelon',
+      'Saint Vincent and the Grenadines',
+      'Samoa',
+      'San Marino',
+      'Sao Tome and Principe',
+      'Saudi Arabia',
+      'Senegal',
+      'Serbia',
+      'Seychelles',
+      'Sierra Leone',
+      'Singapore',
+      'Sint Maarten (Dutch part)',
+      'Slovakia',
+      'Slovenia',
+      'Solomon Islands',
+      'Somalia',
+      'South Africa',
+      'South Georgia and the South Sandwich Islands',
+      'South Korea',
+      'South Sudan',
+      'Spain',
+      'Sri Lanka',
+      'Sudan',
+      'Suriname',
+      'Svalbard and Jan Mayen',
+      'Sweden',
+      'Switzerland',
+      'Syria',
+      'Taiwan',
+      'Tajikistan',
+      'Tanzania',
+      'Thailand',
+      'Timor-Leste',
+      'Togo',
+      'Tokelau',
+      'Tonga',
+      'Trinidad and Tobago',
+      'Tunisia',
+      'Turkmenistan',
+      'Turks and Caicos Islands',
+      'Tuvalu',
+      'Türkiye',
+      'Uganda',
+      'Ukraine',
+      'United Arab Emirates',
+      'United Kingdom',
+      'United States',
+      'United States Minor Outlying Islands',
+      'Uruguay',
+      'Uzbekistan',
+      'Vanuatu',
+      'Venezuela',
+      'Vietnam',
+      'Virgin Islands, British',
+      'Virgin Islands, U.S.',
+      'Wallis and Futuna',
+      'Western Sahara',
+      'Yemen',
+      'Zambia',
+      'Zimbabwe',
+      'Åland Islands'
+    ];
+
     final businessName=TextEditingController(text:existing==null?'':(existing['name']??'').toString());
     final whatsapp=TextEditingController(text:existing==null?'':(existing['whatsapp']??'').toString());
-    final location=TextEditingController(text:existing==null?'':(existing['location']??'').toString());
-    final businessCategory=TextEditingController(text:existing==null?'fashion':(existing['category']??'fashion').toString());
-    String type=existing==null?'fashion':(existing['business_type']??'fashion').toString();
-    if(!['beauty','fashion','both'].contains(type))type='fashion';
+
+    final existingLocation=(existing==null?'':(existing['location']??'').toString()).trim();
+    String cityValue=existingLocation;
+    String? countryValue;
+    if(existingLocation.contains(',')){
+      final parts=existingLocation.split(',');
+      final possibleCountry=parts.removeLast().trim();
+      if(countries.contains(possibleCountry)){
+        countryValue=possibleCountry;
+        cityValue=parts.join(',').trim();
+      }
+    }
+    final city=TextEditingController(text:cityValue);
+
+    final existingCategory=(existing==null?'fashion & beauty':(existing['category']??'fashion & beauty').toString()).trim().toLowerCase();
+    String categoryChoice=categoryOptions.containsKey(existingCategory)?existingCategory:'other';
+    final customCategory=TextEditingController(text:categoryChoice=='other'?existingCategory:'');
+
+    String type=existing==null?'both':(existing['business_type']??'both').toString();
+    if(!['beauty','fashion','both'].contains(type))type='both';
     bool saving=false;
+
+    Future<String?> chooseCountry(BuildContext pickerContext,String? current)async{
+      String search='';
+      return showDialog<String>(
+        context:pickerContext,
+        builder:(countryContext)=>StatefulBuilder(
+          builder:(countryContext,setCountryState){
+            final visible=countries.where((x)=>x.toLowerCase().contains(search.toLowerCase())).toList();
+            return AlertDialog(
+              title:const Text('Select country'),
+              content:SizedBox(
+                width:double.maxFinite,
+                height:430,
+                child:Column(children:[
+                  TextField(
+                    autofocus:true,
+                    decoration:const InputDecoration(
+                      hintText:'Search country',
+                      prefixIcon:Icon(Icons.search),
+                      border:OutlineInputBorder(),
+                    ),
+                    onChanged:(v)=>setCountryState(()=>search=v),
+                  ),
+                  const SizedBox(height:8),
+                  Expanded(child:ListView.builder(
+                    itemCount:visible.length,
+                    itemBuilder:(context,index){
+                      final item=visible[index];
+                      return ListTile(
+                        title:Text(item),
+                        trailing:item==current?const Icon(Icons.check):null,
+                        onTap:()=>Navigator.of(countryContext).pop(item),
+                      );
+                    },
+                  )),
+                ]),
+              ),
+              actions:[TextButton(onPressed:()=>Navigator.of(countryContext).pop(),child:const Text('Cancel'))],
+            );
+          },
+        ),
+      );
+    }
 
     await showDialog<void>(
       context:context,
@@ -263,9 +698,29 @@ class _SellerState extends State<Seller>{
             onChanged:saving?null:(v)=>setDialogState(()=>type=v!),
           ),
           const SizedBox(height:10),
-          TextField(controller:businessCategory,decoration:const InputDecoration(labelText:'Category',hintText:'e.g. clothing, hair, nails, makeup',border:OutlineInputBorder())),
+          DropdownButtonFormField<String>(
+            value:categoryChoice,
+            decoration:const InputDecoration(labelText:'Category',border:OutlineInputBorder()),
+            items:categoryOptions.entries.map((e)=>DropdownMenuItem<String>(value:e.key,child:Text(e.value))).toList(),
+            onChanged:saving?null:(v)=>setDialogState(()=>categoryChoice=v!),
+          ),
+          if(categoryChoice=='other')...[
+            const SizedBox(height:10),
+            TextField(controller:customCategory,decoration:const InputDecoration(labelText:'Your category',hintText:'Type your business category',border:OutlineInputBorder())),
+          ],
           const SizedBox(height:10),
-          TextField(controller:location,decoration:const InputDecoration(labelText:'City / location',hintText:'e.g. Lomé, Togo',border:OutlineInputBorder())),
+          TextField(controller:city,decoration:const InputDecoration(labelText:'City / area',hintText:'e.g. Lomé',border:OutlineInputBorder())),
+          const SizedBox(height:10),
+          InkWell(
+            onTap:saving?null:()async{
+              final picked=await chooseCountry(dialogContext,countryValue);
+              if(picked!=null)setDialogState(()=>countryValue=picked);
+            },
+            child:InputDecorator(
+              decoration:const InputDecoration(labelText:'Country',border:OutlineInputBorder(),suffixIcon:Icon(Icons.arrow_drop_down)),
+              child:Text(countryValue??'Select country',style:TextStyle(color:countryValue==null?Colors.black54:null)),
+            ),
+          ),
           const SizedBox(height:10),
           TextField(controller:whatsapp,keyboardType:TextInputType.phone,decoration:const InputDecoration(labelText:'WhatsApp number',hintText:'+228 90 00 00 00',border:OutlineInputBorder())),
         ])),
@@ -275,10 +730,10 @@ class _SellerState extends State<Seller>{
             onPressed:saving?null:()async{
               final bn=businessName.text.trim();
               final wa=whatsapp.text.trim();
-              final loc=location.text.trim();
-              final cat=businessCategory.text.trim();
+              final cityText=city.text.trim();
+              final cat=(categoryChoice=='other'?customCategory.text.trim():categoryChoice).trim();
               final digits=wa.replaceAll(RegExp(r'[^0-9]'),'');
-              if(bn.isEmpty||wa.isEmpty||loc.isEmpty||cat.isEmpty){
+              if(bn.isEmpty||wa.isEmpty||cityText.isEmpty||countryValue==null||cat.isEmpty){
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Please complete every business field.')));
                 return;
               }
@@ -288,6 +743,7 @@ class _SellerState extends State<Seller>{
               }
               setDialogState(()=>saving=true);
               try{
+                final loc='$cityText, $countryValue';
                 final payload={
                   'owner_id':db.auth.currentUser!.id,
                   'name':bn,
@@ -322,8 +778,8 @@ class _SellerState extends State<Seller>{
     );
     businessName.dispose();
     whatsapp.dispose();
-    location.dispose();
-    businessCategory.dispose();
+    city.dispose();
+    customCategory.dispose();
   }
 
   Future<void> add()async{
