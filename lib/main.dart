@@ -163,26 +163,42 @@ class _LoginPageState extends State<LoginPage>{
       const SizedBox(height:8),
       const Text('Verify your email',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
       const SizedBox(height:6),
-      Text('We sent a verification code to $pendingEmail.',style:const TextStyle(color:Colors.black54)),
+      Text('We sent a confirmation email to $pendingEmail.',style:const TextStyle(color:Colors.black54)),
       const SizedBox(height:24),
-      TextField(
-        controller:code,
-        keyboardType:TextInputType.number,
-        textInputAction:TextInputAction.done,
-        decoration:const InputDecoration(
-          labelText:'Verification code',
-          hintText:'Enter the code from your email',
-          border:OutlineInputBorder(),
-        ),
-        onSubmitted:(_){if(!busy)verifyCode();},
-      ),
-      const SizedBox(height:18),
-      FilledButton(onPressed:busy?null:verifyCode,child:Text(busy?'Verifying...':'Verify and continue')),
-      TextButton(onPressed:busy?null:resendCode,child:const Text('Resend code')),
-      TextButton(
-        onPressed:busy?null:()=>setState((){awaitingVerification=false;code.clear();}),
-        child:const Text('Use a different email'),
-      ),
+      
+      const Text(
+  'Open your email and tap the confirmation link, then return to BEAUTYBOOK.',
+),
+const SizedBox(height:24),
+        
+        FilledButton(
+  onPressed: busy ? null : checkVerification,
+  child: Text(busy ? 'Checking...' : "I've verified my email"),
+),
+        TextButton(
+  onPressed: busy ? null : resendCode,
+  child: const Text('Resend confirmation email'),
+),
+         TextButton(
+  onPressed: busy
+      ? null
+      : () => setState(() {
+            awaitingVerification = false;
+            signup = false;
+            password.clear();
+          }),
+  child: const Text('Back to sign in'),
+), 
+          
+          
+        
+        
+      
+      
+ 
+      
+        
+
     ] else ...[
       Text(signup?'Create your account':'Beauty • Fashion • Your Style',style:const TextStyle(color:Colors.black54)),
       const SizedBox(height:30),
