@@ -9,6 +9,21 @@ import 'l10n.dart';
 
 late final SupabaseClient db;
 
+const currencySymbols = {
+  'CFA': 'CFA',
+  'NGN': '₦',
+  'USD': '\$',
+  'EUR': '€',
+  'GBP': '£',
+};
+
+String showPrice(dynamic amount, dynamic currency) {
+  final code = (currency ?? 'CFA').toString();
+  final symbol = currencySymbols[code] ?? code;
+  if (code == 'CFA') return '$amount CFA';
+  return '$symbol$amount';
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (AppConfig.configured) {
@@ -146,7 +161,7 @@ class _ProPageState extends State<ProPage>{
         Center(child:Text(widget.b['name'],style:const TextStyle(fontSize:25,fontWeight:FontWeight.bold))),
         Center(child:Text(widget.b['location']??'')),const SizedBox(height:22),
         DropdownButtonFormField<Map>(value:selected,decoration:const InputDecoration(labelText:'Service',border:OutlineInputBorder()),
-          items:sv.map((x)=>DropdownMenuItem<Map>(value:x,child:Text('${x['name']} • ${x['price_cfa']} CFA'))).toList(),onChanged:(v)=>setState(()=>selected=v)),
+          items:sv.map((x)=>DropdownMenuItem<Map>(value:x,child:Text("${x['name']} • ${showPrice(x['price_cfa'], x['currency_code'])}"))).toList(),onChanged:(v)=>setState(()=>selected=v)),
         ListTile(contentPadding:EdgeInsets.zero,title:const Text('Date'),subtitle:Text('${day.day}/${day.month}/${day.year}'),trailing:const Icon(Icons.calendar_month),onTap:()async{
           final d=await showDatePicker(context:context,firstDate:DateTime.now(),lastDate:DateTime.now().add(const Duration(days:180)),initialDate:day); if(d!=null)setState(()=>day=d);
         }),
@@ -187,7 +202,7 @@ class ProductCard extends StatelessWidget{
   @override Widget build(BuildContext context)=>Card(child:Padding(padding:const EdgeInsets.all(10),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
     Expanded(child:ClipRRect(borderRadius:BorderRadius.circular(12),child:p['image_url']!=null?Image.network(p['image_url'],width:double.infinity,fit:BoxFit.cover):Container(color:const Color(0xfff7e6ed),child:const Center(child:Icon(Icons.checkroom,size:55))))),
     const SizedBox(height:8),Text(p['name'],maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontWeight:FontWeight.bold)),
-    Text('${p['price_cfa']} CFA',style:const TextStyle(color:Color(0xff8e4162),fontWeight:FontWeight.bold)),
+    Text(showPrice(p['price_cfa'], p['currency_code']),style:const TextStyle(color:Color(0xff8e4162),fontWeight:FontWeight.bold)),
     Row(children:[IconButton(onPressed:()=>fav(context),icon:const Icon(Icons.favorite_border)),Expanded(child:FilledButton(onPressed:order,child:const Text('Order')))])
   ])));
 }
@@ -207,41 +222,104 @@ class Bookings extends StatelessWidget{
 
 class Seller extends StatefulWidget{const Seller({super.key});@override State<Seller> createState()=>_SellerState();}
 class _SellerState extends State<Seller>{
-  final name=TextEditingController(),price=TextEditingController(),stock=TextEditingController(); String category='clothing'; XFile? photo; bool busy=false;
+  final name=TextEditingController(),price=TextEditingController(),stock=TextEditingController();
+  String category='clothing', currency='CFA';
+  XFile? photo;
+  bool busy=false;
+
   Future<Map?> myBusiness() async {
     final x = await db.from('businesses').select().eq('owner_id', db.auth.currentUser!.id).limit(1);
     return x.isEmpty ? null : Map<String,dynamic>.from(x.first);
   }
+
   Future<void> onboard() async {
     await db.from('businesses').insert({'owner_id':db.auth.currentUser!.id,'name':'My BEAUTYBOOK Business','business_type':'both','category':'beauty','location':'Lomé, Togo','verified':false});
     await db.from('profiles').update({'role':'seller'}).eq('id',db.auth.currentUser!.id);
     if(mounted) setState((){});
   }
+
   Future<void> add()async{
-    final b=await myBusiness(); if(b==null){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Create your BEAUTYBOOK business first using the button below.')));return;}
+    final b=await myBusiness();
+    if(b==null){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Create your BEAUTYBOOK business first using the button below.')));
+      return;
+    }
     setState(()=>busy=true);
     try{
       String? url;
       if(photo!=null){
-        final ext=photo!.name.split('.').last; final path='${db.auth.currentUser!.id}/${DateTime.now().millisecondsSinceEpoch}.$ext';
+        final ext=photo!.name.split('.').last;
+        final path='${db.auth.currentUser!.id}/${DateTime.now().millisecondsSinceEpoch}.$ext';
         await db.storage.from('product-images').upload(path,File(photo!.path));
         url=db.storage.from('product-images').getPublicUrl(path);
       }
-      await db.from('products').insert({'business_id':b['id'],'name':name.text.trim(),'category':category,'price_cfa':int.parse(price.text),'stock':int.parse(stock.text),'image_url':url});
-      name.clear();price.clear();stock.clear();photo=null;if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Product published.')));
-    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));}
+      await db.from('products').insert({
+        'business_id':b['id'],
+        'name':name.text.trim(),
+        'category':category,
+        'price_cfa':int.parse(price.text),
+        'currency_code':currency,
+        'stock':int.parse(stock.text),
+        'image_url':url
+      });
+      name.clear();
+      price.clear();
+      stock.clear();
+      photo=null;
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Product published.')));
+    }catch(e){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));
+    }
     if(mounted)setState(()=>busy=false);
   }
-  @override Widget build(BuildContext context)=>ListView(padding:const EdgeInsets.all(18),children:[
-    const Text('Seller Studio',style:TextStyle(fontSize:27,fontWeight:FontWeight.bold)),const Text('Add clothing, wigs, shoes, bags and beauty products.'),const SizedBox(height:10),
-    FutureBuilder<Map?>(future:myBusiness(),builder:(context,s)=>s.connectionState!=ConnectionState.done?const LinearProgressIndicator():s.data==null?FilledButton.icon(onPressed:onboard,icon:const Icon(Icons.storefront),label:const Text('Create my BEAUTYBOOK business')):Card(child:ListTile(leading:const Icon(Icons.verified_user_outlined),title:Text(s.data!['name']??'Business'),subtitle:const Text('Business profile active')))),const SizedBox(height:18),
-    TextField(controller:name,decoration:const InputDecoration(labelText:'Product name',border:OutlineInputBorder())),const SizedBox(height:10),
-    DropdownButtonFormField(value:category,decoration:const InputDecoration(labelText:'Category',border:OutlineInputBorder()),items:['clothing','wigs','shoes','bags','accessories','beauty products'].map((x)=>DropdownMenuItem(value:x,child:Text(x))).toList(),onChanged:(v)=>setState(()=>category=v!)),
-    const SizedBox(height:10),TextField(controller:price,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Price (CFA)',border:OutlineInputBorder())),const SizedBox(height:10),
-    TextField(controller:stock,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Stock quantity',border:OutlineInputBorder())),const SizedBox(height:12),
-    OutlinedButton.icon(onPressed:()async{final x=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:80);if(x!=null)setState(()=>photo=x);},icon:const Icon(Icons.image),label:Text(photo==null?'Choose product photo':'Photo selected')),
-    FilledButton(onPressed:busy?null:add,child:Text(busy?'Publishing...':'Publish product'))
-  ]);
+
+  @override Widget build(BuildContext context)=>ListView(
+    padding:const EdgeInsets.all(18),
+    children:[
+      const Text('Seller Studio',style:TextStyle(fontSize:27,fontWeight:FontWeight.bold)),
+      const Text('Add clothing, wigs, shoes, bags and beauty products.'),
+      const SizedBox(height:10),
+      FutureBuilder<Map?>(
+        future:myBusiness(),
+        builder:(context,s)=>s.connectionState!=ConnectionState.done
+          ? const LinearProgressIndicator()
+          : s.data==null
+            ? FilledButton.icon(onPressed:onboard,icon:const Icon(Icons.storefront),label:const Text('Create my BEAUTYBOOK business'))
+            : Card(child:ListTile(leading:const Icon(Icons.verified_user_outlined),title:Text(s.data!['name']??'Business'),subtitle:const Text('Business profile active'))),
+      ),
+      const SizedBox(height:18),
+      TextField(controller:name,decoration:const InputDecoration(labelText:'Product name',border:OutlineInputBorder())),
+      const SizedBox(height:10),
+      DropdownButtonFormField<String>(
+        value:category,
+        decoration:const InputDecoration(labelText:'Category',border:OutlineInputBorder()),
+        items:['clothing','wigs','shoes','bags','accessories','beauty products'].map((x)=>DropdownMenuItem<String>(value:x,child:Text(x))).toList(),
+        onChanged:(v)=>setState(()=>category=v!),
+      ),
+      const SizedBox(height:10),
+      DropdownButtonFormField<String>(
+        value:currency,
+        decoration:const InputDecoration(labelText:'Currency',border:OutlineInputBorder()),
+        items:['CFA','NGN','USD','EUR','GBP'].map((x)=>DropdownMenuItem<String>(value:x,child:Text(x))).toList(),
+        onChanged:(v)=>setState(()=>currency=v!),
+      ),
+      const SizedBox(height:10),
+      TextField(
+        controller:price,
+        keyboardType:TextInputType.number,
+        decoration:InputDecoration(labelText:'Price ($currency)',border:const OutlineInputBorder()),
+      ),
+      const SizedBox(height:10),
+      TextField(controller:stock,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Stock quantity',border:OutlineInputBorder())),
+      const SizedBox(height:12),
+      OutlinedButton.icon(
+        onPressed:()async{final x=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:80);if(x!=null)setState(()=>photo=x);},
+        icon:const Icon(Icons.image),
+        label:Text(photo==null?'Choose product photo':'Photo selected'),
+      ),
+      FilledButton(onPressed:busy?null:add,child:Text(busy?'Publishing...':'Publish product'))
+    ],
+  );
 }
 
 class Profile extends StatelessWidget{
