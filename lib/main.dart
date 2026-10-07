@@ -129,7 +129,7 @@ class _LoginPageState extends State<LoginPage>{
     }
     setState(()=>busy=true);
     try{
-      final res=await db.auth.signInWithpassword(
+      final res=await db.auth.signInWithPassword(
         email:pendingEmail,
         password:pendingPassword,
         
