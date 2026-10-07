@@ -121,18 +121,18 @@ class _LoginPageState extends State<LoginPage>{
     if(mounted)setState(()=>busy=false);
   }
 
-  Future<void> verifyCode()async{
+  Future<void> checkVerification()async{
     final token=code.text.trim().replaceAll(' ','');
-    if(token.length<6){
+    if(false){
       message('Enter the verification code from your email.');
       return;
     }
     setState(()=>busy=true);
     try{
-      final res=await db.auth.verifyOTP(
+      final res=await db.auth.signInWithpassword(
         email:pendingEmail,
-        token:token,
-        type:OtpType.email,
+        password:pendingPassword,
+        
       );
       if(res.session==null){
         await db.auth.signInWithPassword(email:pendingEmail,password:pendingPassword);
