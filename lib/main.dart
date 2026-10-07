@@ -189,11 +189,15 @@ class _ShopState extends State<Shop>{
 
 class ProductCard extends StatelessWidget{
   final Map p; const ProductCard({super.key,required this.p});
-  Future<void> order()async{
+  Future<void> order(BuildContext context)async{
     final phone=(p['businesses']?['whatsapp']??'').toString().replaceAll(RegExp(r'[^0-9]'),'');
-    if(phone.isEmpty)return;
+    if(phone.isEmpty){
+      if(context.mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('This seller has not added a WhatsApp number yet.')));
+      return;
+    }
     final u=Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent("Hello, I found ${p['name']} on BEAUTYBOOK. Is it available?")}');
-    await launchUrl(u,mode:LaunchMode.externalApplication);
+    final opened=await launchUrl(u,mode:LaunchMode.externalApplication);
+    if(!opened&&context.mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Unable to open WhatsApp.')));
   }
   Future<void> fav(BuildContext context)async{
     try{await db.from('favorites').insert({'user_id':db.auth.currentUser!.id,'product_id':p['id']}); if(context.mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Added to favorites.')));}
@@ -203,7 +207,7 @@ class ProductCard extends StatelessWidget{
     Expanded(child:ClipRRect(borderRadius:BorderRadius.circular(12),child:p['image_url']!=null?Image.network(p['image_url'],width:double.infinity,fit:BoxFit.cover):Container(color:const Color(0xfff7e6ed),child:const Center(child:Icon(Icons.checkroom,size:55))))),
     const SizedBox(height:8),Text(p['name'],maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontWeight:FontWeight.bold)),
     Text(showPrice(p['price_cfa'], p['currency_code']),style:const TextStyle(color:Color(0xff8e4162),fontWeight:FontWeight.bold)),
-    Row(children:[IconButton(onPressed:()=>fav(context),icon:const Icon(Icons.favorite_border)),Expanded(child:FilledButton(onPressed:order,child:const Text('Order')))])
+    Row(children:[IconButton(onPressed:()=>fav(context),icon:const Icon(Icons.favorite_border)),Expanded(child:FilledButton(onPressed:()=>order(context),child:const Text('Order')))])
   ])));
 }
 
@@ -228,20 +232,111 @@ class _SellerState extends State<Seller>{
   bool busy=false;
 
   Future<Map?> myBusiness() async {
-    final x = await db.from('businesses').select().eq('owner_id', db.auth.currentUser!.id).limit(1);
-    return x.isEmpty ? null : Map<String,dynamic>.from(x.first);
+    final x=await db.from('businesses').select().eq('owner_id',db.auth.currentUser!.id).limit(1);
+    return x.isEmpty?null:Map<String,dynamic>.from(x.first);
   }
 
-  Future<void> onboard() async {
-    await db.from('businesses').insert({'owner_id':db.auth.currentUser!.id,'name':'My BEAUTYBOOK Business','business_type':'both','category':'beauty','location':'Lomé, Togo','verified':false});
-    await db.from('profiles').update({'role':'seller'}).eq('id',db.auth.currentUser!.id);
-    if(mounted) setState((){});
+  Future<void> businessForm([Map? existing])async{
+    final businessName=TextEditingController(text:existing==null?'':(existing['name']??'').toString());
+    final whatsapp=TextEditingController(text:existing==null?'':(existing['whatsapp']??'').toString());
+    final location=TextEditingController(text:existing==null?'':(existing['location']??'').toString());
+    final businessCategory=TextEditingController(text:existing==null?'fashion':(existing['category']??'fashion').toString());
+    String type=existing==null?'fashion':(existing['business_type']??'fashion').toString();
+    if(!['beauty','fashion','both'].contains(type))type='fashion';
+    bool saving=false;
+
+    await showDialog<void>(
+      context:context,
+      builder:(dialogContext)=>StatefulBuilder(builder:(dialogContext,setDialogState)=>AlertDialog(
+        title:Text(existing==null?'Create your business':'Edit business'),
+        content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+          TextField(controller:businessName,decoration:const InputDecoration(labelText:'Business name',border:OutlineInputBorder())),
+          const SizedBox(height:10),
+          DropdownButtonFormField<String>(
+            value:type,
+            decoration:const InputDecoration(labelText:'Business type',border:OutlineInputBorder()),
+            items:const [
+              DropdownMenuItem(value:'fashion',child:Text('Fashion / products')),
+              DropdownMenuItem(value:'beauty',child:Text('Beauty professional')),
+              DropdownMenuItem(value:'both',child:Text('Beauty + fashion')),
+            ],
+            onChanged:saving?null:(v)=>setDialogState(()=>type=v!),
+          ),
+          const SizedBox(height:10),
+          TextField(controller:businessCategory,decoration:const InputDecoration(labelText:'Category',hintText:'e.g. clothing, hair, nails, makeup',border:OutlineInputBorder())),
+          const SizedBox(height:10),
+          TextField(controller:location,decoration:const InputDecoration(labelText:'City / location',hintText:'e.g. Lomé, Togo',border:OutlineInputBorder())),
+          const SizedBox(height:10),
+          TextField(controller:whatsapp,keyboardType:TextInputType.phone,decoration:const InputDecoration(labelText:'WhatsApp number',hintText:'+228 90 00 00 00',border:OutlineInputBorder())),
+        ])),
+        actions:[
+          TextButton(onPressed:saving?null:()=>Navigator.of(dialogContext).pop(),child:const Text('Cancel')),
+          FilledButton(
+            onPressed:saving?null:()async{
+              final bn=businessName.text.trim();
+              final wa=whatsapp.text.trim();
+              final loc=location.text.trim();
+              final cat=businessCategory.text.trim();
+              final digits=wa.replaceAll(RegExp(r'[^0-9]'),'');
+              if(bn.isEmpty||wa.isEmpty||loc.isEmpty||cat.isEmpty){
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Please complete every business field.')));
+                return;
+              }
+              if(digits.length<8){
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a valid WhatsApp number with country code.')));
+                return;
+              }
+              setDialogState(()=>saving=true);
+              try{
+                final payload={
+                  'owner_id':db.auth.currentUser!.id,
+                  'name':bn,
+                  'business_name':bn,
+                  'business_type':type,
+                  'category':cat.toLowerCase(),
+                  'location':loc,
+                  'whatsapp':wa,
+                  'verified':existing==null?false:(existing['verified']??false),
+                  'active':true
+                };
+                if(existing==null){
+                  await db.from('businesses').insert(payload);
+                }else{
+                  await db.from('businesses').update(payload).eq('id',existing['id']);
+                }
+                await db.from('profiles').update({'role':'seller'}).eq('id',db.auth.currentUser!.id);
+                if(dialogContext.mounted)Navigator.of(dialogContext).pop();
+                if(mounted){
+                  setState((){});
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(existing==null?'Business created.':'Business updated.')));
+                }
+              }catch(e){
+                if(dialogContext.mounted)setDialogState(()=>saving=false);
+                if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));
+              }
+            },
+            child:Text(saving?'Saving...':existing==null?'Create business':'Save changes'),
+          )
+        ],
+      )),
+    );
+    businessName.dispose();
+    whatsapp.dispose();
+    location.dispose();
+    businessCategory.dispose();
   }
 
   Future<void> add()async{
     final b=await myBusiness();
     if(b==null){
-      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Create your BEAUTYBOOK business first using the button below.')));
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Create your BEAUTYBOOK business first.')));
+      return;
+    }
+    final productName=name.text.trim();
+    final productPrice=int.tryParse(price.text.trim());
+    final productStock=int.tryParse(stock.text.trim());
+    if(productName.isEmpty||productPrice==null||productPrice<0||productStock==null||productStock<0){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Enter a product name, valid price and valid stock quantity.')));
       return;
     }
     setState(()=>busy=true);
@@ -255,17 +350,17 @@ class _SellerState extends State<Seller>{
       }
       await db.from('products').insert({
         'business_id':b['id'],
-        'name':name.text.trim(),
+        'name':productName,
+        'name_en':productName,
+        'name_fr':productName,
         'category':category,
-        'price_cfa':int.parse(price.text),
+        'price_cfa':productPrice,
         'currency_code':currency,
-        'stock':int.parse(stock.text),
-        'image_url':url
+        'stock':productStock,
+        'image_url':url,
+        'active':true
       });
-      name.clear();
-      price.clear();
-      stock.clear();
-      photo=null;
+      name.clear();price.clear();stock.clear();photo=null;
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Product published.')));
     }catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));
@@ -277,22 +372,30 @@ class _SellerState extends State<Seller>{
     padding:const EdgeInsets.all(18),
     children:[
       const Text('Seller Studio',style:TextStyle(fontSize:27,fontWeight:FontWeight.bold)),
-      const Text('Add clothing, wigs, shoes, bags and beauty products.'),
+      const Text('Create your business, then add products for customers to discover.'),
       const SizedBox(height:10),
       FutureBuilder<Map?>(
         future:myBusiness(),
         builder:(context,s)=>s.connectionState!=ConnectionState.done
           ? const LinearProgressIndicator()
           : s.data==null
-            ? FilledButton.icon(onPressed:onboard,icon:const Icon(Icons.storefront),label:const Text('Create my BEAUTYBOOK business'))
-            : Card(child:ListTile(leading:const Icon(Icons.verified_user_outlined),title:Text(s.data!['name']??'Business'),subtitle:const Text('Business profile active'))),
+            ? FilledButton.icon(onPressed:()=>businessForm(),icon:const Icon(Icons.storefront),label:const Text('Create my BEAUTYBOOK business'))
+            : Card(child:Column(children:[
+                ListTile(
+                  leading:const Icon(Icons.verified_user_outlined),
+                  title:Text(s.data!['name']??'Business'),
+                  subtitle:Text('${s.data!['category']??''} • ${s.data!['location']??''}\n${s.data!['whatsapp']??''}'),
+                  isThreeLine:true,
+                ),
+                Align(alignment:Alignment.centerRight,child:TextButton.icon(onPressed:()=>businessForm(s.data),icon:const Icon(Icons.edit_outlined),label:const Text('Edit business')))
+              ])),
       ),
       const SizedBox(height:18),
       TextField(controller:name,decoration:const InputDecoration(labelText:'Product name',border:OutlineInputBorder())),
       const SizedBox(height:10),
       DropdownButtonFormField<String>(
         value:category,
-        decoration:const InputDecoration(labelText:'Category',border:OutlineInputBorder()),
+        decoration:const InputDecoration(labelText:'Product category',border:OutlineInputBorder()),
         items:['clothing','wigs','shoes','bags','accessories','beauty products'].map((x)=>DropdownMenuItem<String>(value:x,child:Text(x))).toList(),
         onChanged:(v)=>setState(()=>category=v!),
       ),
@@ -304,11 +407,7 @@ class _SellerState extends State<Seller>{
         onChanged:(v)=>setState(()=>currency=v!),
       ),
       const SizedBox(height:10),
-      TextField(
-        controller:price,
-        keyboardType:TextInputType.number,
-        decoration:InputDecoration(labelText:'Price ($currency)',border:const OutlineInputBorder()),
-      ),
+      TextField(controller:price,keyboardType:TextInputType.number,decoration:InputDecoration(labelText:'Price ($currency)',border:const OutlineInputBorder())),
       const SizedBox(height:10),
       TextField(controller:stock,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Stock quantity',border:OutlineInputBorder())),
       const SizedBox(height:12),
